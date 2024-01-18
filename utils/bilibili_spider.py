@@ -11,6 +11,8 @@ from selenium.webdriver.chrome.service import Service
 from selenium.webdriver.chrome.options import Options
 from bs4 import BeautifulSoup
 from urllib import parse as url_parse
+from bilibili_api import video
+import asyncio
 import random
 
 from .tools import mkdir_if_missing, write_json, read_json
@@ -48,6 +50,9 @@ class Bilibili_Spider():
         return seconds
 
     def date_convert(self, date_str):
+        if '小时前' in date_str:
+            return datetime.datetime.now().strftime('%Y-%m-%d')
+
         date_item = date_str.split('-')
         assert len(date_item) == 2 or len(date_item) == 3, 'date format error: {}, x-x or x-x-x expected!'.format(date_str)
         if len(date_item) == 2:
@@ -74,7 +79,7 @@ class Bilibili_Spider():
     def get_videos_by_page(self, idx):
         # 获取第 page_idx 页的视频信息
         urls_page, titles_page, plays_page, dates_page, durations_page = [], [], [], [], []
-        page_url = self.user_url + '/video?tid=0&page={}&keyword=&order=pubdate'.format(idx+1)
+        page_url = self.user_url + '/video?tid=0&special_type=&pn={}&keyword=&order=pubdate'.format(idx+1)
         self.browser.get(page_url)
         time.sleep(self.t+2*random.random())
         html = BeautifulSoup(self.browser.page_source, features="html.parser")
@@ -102,7 +107,33 @@ class Bilibili_Spider():
 
         return urls_page, titles_page, plays_page, dates_page, durations_page
 
-    def save(self, json_path, bvs, urls, titles, plays, durations, dates):
+    async def get_data(self,bvid_list):
+        desc_array = []
+        view_array = []
+        danmaku_array = []
+        coin_array = []
+        fav_array = []
+        reply_array = []
+        share_array = []
+
+        for bvid in bvid_list:
+            # 实例化 Video 类
+            v = video.Video(bvid=bvid)
+            # 获取信息
+            info = await v.get_info()
+
+            # 添加值到各自的数组
+            desc_array.append(info.get('desc', ''))
+            view_array.append(info['stat'].get('view', 0))
+            danmaku_array.append(info['stat'].get('danmaku', 0))
+            coin_array.append(info['stat'].get('coin', 0))
+            fav_array.append(info['stat'].get('favorite', 0))
+            reply_array.append(info['stat'].get('reply', 0))
+            share_array.append(info['stat'].get('share', 0))
+
+        return desc_array, view_array, danmaku_array, coin_array, fav_array, reply_array, share_array
+
+    def save(self, json_path, bvs, urls, titles, desc, plays, coin, reply, share, durations, dates):
         data_list = []
         for i in range(len(urls)):
             result = {}
@@ -110,7 +141,11 @@ class Bilibili_Spider():
             result['bv'] = bvs[i]
             result['url'] = urls[i]
             result['title'] = titles[i]
+            result['desc'] = desc[i]
             result['play'] = plays[i]
+            result['coin'] = coin[i]
+            result['reply'] = reply[i]
+            result['share'] = share[i]
             result['duration'] = durations[i]
             result['pub_date'] = dates[i][0]
             result['now'] = dates[i][1]
@@ -134,7 +169,11 @@ class Bilibili_Spider():
         bvs = []
         urls = []
         titles = []
+        desc = []
         plays = []
+        coin = []
+        reply = []
+        share = []
         dates = []
         durations = []   # by seconds
 
@@ -152,10 +191,16 @@ class Bilibili_Spider():
             print('result:')
             print('{}_{}: '.format(self.user_name, self.uid), bvs_page, ', {} in total'.format(len(urls_page)))
             sys.stdout.flush()
+            loop = asyncio.get_event_loop()
+            desc_array, view_array, danmaku_array, coin_array, fav_array, reply_array, share_array = loop.run_until_complete(self.get_data(bvs_page))
             bvs.extend(bvs_page)
             urls.extend(urls_page)
             titles.extend(titles_page)
+            desc.extend(desc_array)
             plays.extend(plays_page)
+            coin.extend(coin_array)
+            reply.extend(reply_array)
+            share.extend(share_array)
             dates.extend(dates_page)
             durations.extend(durations_page)
             if self.save_by_page:
@@ -163,7 +208,7 @@ class Bilibili_Spider():
                 self.save(json_path_page, bvs_page, urls_page, titles_page, plays_page, durations_page, dates_page)
 
         json_path = osp.join(self.save_dir_json, '{}_{}'.format(self.user_name, self.uid), 'primary', 'full.json')
-        self.save(json_path, bvs, urls, titles, plays, durations, dates)
+        self.save(json_path, bvs, urls, titles, desc, plays, coin, reply, share, durations, dates)
 
     def get_url(self, url):
         self.browser.get(url)
